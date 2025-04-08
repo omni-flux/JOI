@@ -4,11 +4,11 @@ import asyncio
 import google.generativeai as genai
 from dotenv import load_dotenv
 from prompts import system_prompt
-# Import the shared tools
-from tools import tool_registry
-
 # Load environment variables
 load_dotenv()
+# Import the  tools
+from tools import tool_registry
+
 # Configure Gemini API key
 try:
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])

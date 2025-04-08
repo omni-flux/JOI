@@ -2,11 +2,11 @@ import os
 import asyncio
 from openai import OpenAI
 from dotenv import load_dotenv
+load_dotenv()
 from prompts import system_prompt
 
-
 from tools import tool_registry
-load_dotenv()
+
 
 # OpenAI API configuration
 api_key = os.getenv("OPENAI_API_KEY")
