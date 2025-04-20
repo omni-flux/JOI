@@ -3,13 +3,6 @@ from .web_search import search_and_crawl
 from .system_info import system_info
 from .tool_registry import ToolRegistry
 
-
-# +-----------------astra db-------------------------+
-from .memory_astra import store_memory, query_memory
-from .local_embeddings import LocalEmbeddingGenerator
-# +--------------------------------------------------+
-
-
 # --- Import File System Tool Functions ---
 from .file_system import (
     list_directory,
@@ -26,7 +19,6 @@ from .email_sender import send_email # ADD THIS LINE
 tool_registry = ToolRegistry()
 
 # --- Register existing tools ---
-# Assigning sequential priorities, adjust if specific order is critical
 tool_registry.register(
     name="app",
     function=open_app,
@@ -78,28 +70,12 @@ tool_registry.register(
     priority=44
 )
 
-# --- Register NEW Email Tool ---
+# --- Register Email Tool ---
 tool_registry.register(
     name="email",
     function=send_email,
     pattern=r'\[EMAIL:\s*([^\]]+)\]',
     priority=50
 )
-
-# +---------------astra db---------------+
-tool_registry.register(
-    name="memory_store",
-    function=store_memory,
-    pattern=r'\[MEMORY_STORE:\s*([^\]]+)\]', # Captures the text to store
-    priority=60
-)
-tool_registry.register(
-    name="memory_query",
-    function=query_memory,
-    pattern=r'\[MEMORY_QUERY:\s*([^\]]+)\]', # Captures the query
-    priority=61
-)
-# +--------------------------------------+
-
 
 __all__ = ['tool_registry']

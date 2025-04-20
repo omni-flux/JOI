@@ -9,7 +9,7 @@ load_dotenv()
 # Import the  tools
 from tools import tool_registry
 
-# Configure Gemini API key
+
 try:
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 except KeyError:
