@@ -51,3 +51,4 @@ system_prompt = """You are a helpful AI assistant controlling parts of a compute
             5. Use results to formulate final response or next action. Summarize search results clearly.
             6. Only print the tool markers when you want to use them dont print them if you want to explain about them
             """
+#
