@@ -4,11 +4,11 @@ import asyncio
 import google.generativeai as genai
 from dotenv import load_dotenv
 from prompts import system_prompt
+
 # Load environment variables
 load_dotenv()
 # Import the  tools
 from tools import tool_registry
-
 
 try:
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
@@ -31,7 +31,8 @@ generation_config = {
 
 try:
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-pro-exp-02-05", # gemini-2.0-pro-exp-02-05 Input token limit 2,048,576 Output token limit 8,192
+        model_name="gemini-2.0-pro-exp-02-05",
+        # gemini-2.0-pro-exp-02-05 Input token limit 2,048,576 Output token limit 8,192
         generation_config=generation_config,
     )
     chat_session = model.start_chat(history=[])
@@ -46,7 +47,7 @@ conversation_history = [
         "role": "system",
         "content": (system_prompt
 
-        )
+                    )
     }
 ]
 
@@ -66,6 +67,7 @@ def send_to_gemini(history):
 
 async def process_tool_calls(ai_response):
     """Process all tool calls in the AI response."""
+    # Extract tool calls using the registry's method
     tool_calls = tool_registry.extract_tool_calls(ai_response)
 
     if not tool_calls:
@@ -75,9 +77,10 @@ async def process_tool_calls(ai_response):
     for i, (tool_type, tool_value) in enumerate(tool_calls):
         print(f"Executing tool call {i + 1}/{len(tool_calls)}: {tool_type} - {tool_value}")
 
-        # Use the registry to execute the tool
+        # Execute the tool using the registry
         result = await tool_registry.execute(tool_type, tool_value)
 
+        # Log appropriate message based on tool type
         if tool_type == "app":
             print(f"Tool result: {result}")
         elif tool_type == "search":
@@ -89,6 +92,7 @@ async def process_tool_calls(ai_response):
 
     # Add all tool results to conversation history
     for tool_type, tool_value, result in tool_results:
+        # Use a consistent naming convention for tool types in the conversation
         type_name = "Application" if tool_type == "app" else "Search" if tool_type == "search" else tool_type.capitalize()
         conversation_history.append({
             "role": "tool",
