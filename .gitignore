@@ -4,3 +4,4 @@ tools/token.pickle
 __pycache__
 .env
 tools/.idea
+.idea
