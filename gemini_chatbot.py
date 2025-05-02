@@ -31,8 +31,7 @@ generation_config = {
 
 try:
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-pro-exp-02-05",
-        # gemini-2.0-pro-exp-02-05 Input token limit 2,048,576 Output token limit 8,192
+        model_name="gemini-2.0-pro-exp-02-05",# gemini-2.0-pro-exp-02-05 Input token limit 2,048,576 Output token limit 8,192
         generation_config=generation_config,
     )
     chat_session = model.start_chat(history=[])
@@ -46,23 +45,35 @@ conversation_history = [
     {
         "role": "system",
         "content": (system_prompt
-
                     )
     }
 ]
 
 
-def send_to_gemini(history):
+def send_to_gemini(history, stream=True):
     """
     Sends the conversation history to Gemini as a JSON payload and returns the AI's response text.
+    When stream=True, yields chunks of the response as they arrive.
     """
     try:
         payload = json.dumps(history)
-        response = chat_session.send_message(payload)
-        return response.text
+
+        if stream:
+            # For streaming response
+            accumulated_response = ""
+            for chunk in chat_session.send_message(payload, stream=True):
+                if chunk.text:
+                    accumulated_response += chunk.text
+                    yield chunk.text, accumulated_response
+            return accumulated_response
+        else:
+            # For non-streaming response (original behavior)
+            response = chat_session.send_message(payload)
+            return response.text
     except Exception as e:
-        print(f"Error communicating with Gemini API: {str(e)}")
-        return f"I encountered an error: {str(e)}"
+        error_message = f"Error communicating with Gemini API: {str(e)}"
+        print(error_message)
+        return error_message
 
 
 async def process_tool_calls(ai_response):
@@ -105,7 +116,6 @@ async def process_tool_calls(ai_response):
 async def conversation_loop():
     try:
         print("Gemini Assistant initialized. Type 'exit' or 'quit' to end the conversation.")
-        # print(f"Maximum consecutive tool calls: {MAX_CONSECUTIVE_TOOL_CALLS}")
 
         while True:
             user_input = input("You: ").strip()
@@ -116,24 +126,39 @@ async def conversation_loop():
             # Append user's message to the conversation history
             conversation_history.append({"role": "human", "content": user_input})
 
-            # Get AI response from Gemini
-            ai_response = send_to_gemini(conversation_history)
-            conversation_history.append({"role": "assistant", "content": ai_response})
-            print("AI:", ai_response)
+            # Get AI response from Gemini with streaming
+            accumulated_response = ""
+            print("AI: ", end="", flush=True)
+
+            for chunk, accumulated in send_to_gemini(conversation_history, stream=True):
+                print(chunk, end="", flush=True)
+                accumulated_response = accumulated
+
+            print()  # New line after streaming completes
+
+            # Add the complete response to conversation history
+            conversation_history.append({"role": "assistant", "content": accumulated_response})
 
             # Process tool calls in a loop until no more tool calls or max limit reached
             tool_call_count = 0
             has_tool_calls = True
 
             while has_tool_calls and tool_call_count < MAX_CONSECUTIVE_TOOL_CALLS:
-                has_tool_calls = await process_tool_calls(ai_response)
+                has_tool_calls = await process_tool_calls(accumulated_response)
 
                 if has_tool_calls:
                     tool_call_count += 1
-                    # Get follow-up response from the AI after tool execution
-                    ai_response = send_to_gemini(conversation_history)
-                    conversation_history.append({"role": "assistant", "content": ai_response})
-                    print("AI:", ai_response)
+                    # Get follow-up response from the AI after tool execution with streaming
+                    accumulated_response = ""
+                    print("AI: ", end="", flush=True)
+
+                    for chunk, accumulated in send_to_gemini(conversation_history, stream=True):
+                        print(chunk, end="", flush=True)
+                        accumulated_response = accumulated
+
+                    print()  # New line after streaming completes
+
+                    conversation_history.append({"role": "assistant", "content": accumulated_response})
 
             if tool_call_count == MAX_CONSECUTIVE_TOOL_CALLS:
                 print(f"Reached maximum consecutive tool calls limit ({MAX_CONSECUTIVE_TOOL_CALLS})")
