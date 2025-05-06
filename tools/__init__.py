@@ -2,6 +2,7 @@ from .app_control import open_app
 from .web_search import search_and_crawl
 from .system_info import system_info
 from .email_sender import send_email
+from .calendar_tasks import manage_calendar_tasks
 
 from .file_system import (
     list_directory,
@@ -58,5 +59,10 @@ tool_registry.register(
     function=send_email
 )
 
+# Register the new Calendar/Tasks tool
+tool_registry.register(
+    name="calendar", # Tool name the AI will use
+    function=manage_calendar_tasks
+)
 __all__ = ['tool_registry']
 

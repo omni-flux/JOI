@@ -16,7 +16,15 @@ get all the api keys and paste them
 
 run the api_server.py file in a separate cmd window (python api_server.py)
 
-run the streamlit_app.py in another separate cmd window (streamlit run streamlit_app.py)
+api_server jason schema
+
+ws://localhost:8000/ws/test_user
+
+Start a New Chat
+{
+  "type": "start_chat",
+  "model": "openai"
+}
 
 
 
