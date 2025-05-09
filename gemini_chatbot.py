@@ -31,7 +31,8 @@ generation_config = {
 
 try:
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-pro-exp-02-05",# gemini-2.0-pro-exp-02-05 Input token limit 2,048,576 Output token limit 8,192
+        model_name="gemini-2.5-flash-preview-04-17",
+        # model_name="gemini-2.0-pro-exp-02-05",# gemini-2.0-pro-exp-02-05 Input token limit 2,048,576 Output token limit 8,192
         generation_config=generation_config,
     )
     chat_session = model.start_chat(history=[])
