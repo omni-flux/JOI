@@ -3,6 +3,8 @@ from .web_search import search_and_crawl
 from .system_info import system_info
 from .email_sender import send_email
 from .calendar_tasks import manage_calendar_tasks
+from .browser_tool import browser_automation
+
 
 from .file_system import (
     list_directory,
@@ -64,5 +66,12 @@ tool_registry.register(
     name="calendar", # Tool name the AI will use
     function=manage_calendar_tasks
 )
+
+# Register Browser Automation Tool
+tool_registry.register(
+    name="browser",
+    function=browser_automation
+)
+
 __all__ = ['tool_registry']
 

@@ -9,7 +9,7 @@ from prompts import system_prompt
 from tools import tool_registry
 
 # OpenAI API configuration
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("OPENAI_API_KEY_GH")
 api_base = os.getenv("OPENAI_API_BASE", "https://models.inference.ai.azure.com")
 
 # Create OpenAI client

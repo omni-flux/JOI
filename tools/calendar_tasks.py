@@ -1,5 +1,3 @@
-# --- START OF FINAL CORRECTED FILE tools/calendar_tasks.py ---
-
 import re
 import pickle
 import asyncio
@@ -8,8 +6,7 @@ import datetime
 from typing import Dict, Any, List, Tuple, Optional
 from pathlib import Path
 
-# Google API Libraries (Install required: pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib)
-from googleapiclient.discovery import build, Resource  # Resource is used for type hinting
+from googleapiclient.discovery import build, Resource
 from googleapiclient.errors import HttpError
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -591,4 +588,3 @@ async def manage_calendar_tasks(args: Dict[str, Any]) -> str:
         logger.error(f"Unexpected error in manage_calendar_tasks tool: {str(e)}", exc_info=True)
         return f"An unexpected error occurred processing the calendar/tasks command: {type(e).__name__}"
 
-# --- END OF FINAL CORRECTED FILE tools/calendar_tasks.py ---
