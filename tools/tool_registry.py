@@ -1,104 +1,120 @@
-from typing import Dict, Callable, Awaitable,Union, List, Tuple, Optional
 import inspect
-import re
+import json
+import logging
+from typing import Dict, Callable, Awaitable, Union, List, Tuple, Any
 
-ToolHandler = Union[Callable[..., str], Callable[..., Awaitable[str]]]
+
+logger = logging.getLogger(__name__)
+
+ToolHandler = Union[Callable[[Dict[str, Any]], str], Callable[[Dict[str, Any]], Awaitable[str]]]
 
 class ToolRegistry:
-    """Registry for managing available tools (Minimal Change Version)."""
+    """Registry for managing and executing tools based on JSON calls."""
 
     def __init__(self):
+        """Initializes the registry, storing tools by name."""
         self.tools: Dict[str, ToolHandler] = {}
-        self.patterns: Dict[str, str] = {}
-        self.priorities: Dict[str, int] = {}
+        logger.info("ToolRegistry initialized.")
 
-
-    def register(self, name: str, function: ToolHandler, pattern: str, priority: int):
-        """Register a tool with its name, handler function, regex pattern, and EXPLICIT priority."""
-
+    def register(self, name: str, function: ToolHandler):
+        """Register a tool with its name and handler function."""
         if not callable(function):
-             raise TypeError(f"Handler for tool '{name}' must be a callable function, got {type(function)}")
+            raise TypeError(f"Handler for tool '{name}' must be a callable function, got {type(function)}")
+        if name in self.tools:
+             logger.warning(f"Tool '{name}' is being re-registered. Overwriting previous handler.")
         self.tools[name] = function
-        self.patterns[name] = pattern
-        self.priorities[name] = priority
+        logger.debug(f"Registered tool: '{name}'")
 
-    async def execute(self, tool_type: str, tool_argument: Optional[str]) -> str: # tool_argument can be None
+    async def execute(self, tool_name: str, args: Dict[str, Any]) -> str:
         """
-        Execute a tool and handle both sync and async handlers.
-        **MODIFIED** to handle tools requiring one or two arguments.
-        """
-        if tool_type not in self.tools:
-            return f"Unknown tool type: {tool_type}"
+        Execute a tool by name with the provided arguments dictionary.
+        Handles both synchronous and asynchronous tool functions.
 
-        handler = self.tools[tool_type]
+        Args:
+            tool_name (str): The name of the tool to execute (e.g., "fs_write").
+            args (Dict[str, Any]): The dictionary of arguments extracted from the JSON payload.
+
+        Returns:
+            str: The result string from the executed tool function.
+        """
+        if tool_name not in self.tools:
+            logger.error(f"Attempted to execute unknown tool: '{tool_name}'")
+            return f"Error: Unknown tool '{tool_name}'. Available tools: {', '.join(self.tools.keys())}"
+
+        handler = self.tools[tool_name]
+        logger.info(f"Executing tool '{tool_name}' with args: {args}")
 
         try:
-            if tool_type in ["fs_write", "fs_find"]:
-                if tool_argument is None or '|' not in tool_argument:
-                    usage = f"[{tool_type.upper()}: {'path/file.txt | content' if tool_type == 'fs_write' else 'start_path | *.pattern'}]"
-                    return f"Error: Invalid arguments for {tool_type}. Usage: {usage}. Got: '{tool_argument}'"
 
-                parts = tool_argument.split('|', 1)
-                arg1 = parts[0].strip()
-                arg2 = parts[1].strip()
-
-                if not arg1:
-                     return f"Error: Path/start_path argument cannot be empty for {tool_type}."
-
-                if inspect.iscoroutinefunction(handler):
-                    return await handler(arg1, arg2)
-                else:
-                    return handler(arg1, arg2)
-
+            if inspect.iscoroutinefunction(handler):
+                result = await handler(args)
             else:
-                actual_argument = tool_argument
+                result = handler(args)
 
-
-                if tool_type == "sysinfo" and not actual_argument:
-                    actual_argument = "basic"
-                elif actual_argument is None and tool_type != "sysinfo":
-                     return f"Error: Missing argument for tool {tool_type}."
-
-
-                if inspect.iscoroutinefunction(handler):
-                    return await handler(actual_argument)
-                else:
-                    return handler(actual_argument)
-
+            logger.info(f"Tool '{tool_name}' executed successfully.")
+            return str(result) if result is not None else "Tool executed successfully, but returned no output."
 
         except Exception as e:
-             return f"Error: A {e} error occurred while executing tool '{tool_type}'."
+            logger.error(f"Error executing tool '{tool_name}' with args {args}: {e}", exc_info=True)
+            return f"Error: An exception occurred while executing tool '{tool_name}': {type(e).__name__} - {e}"
 
+    def extract_tool_calls(self, text: str) -> List[Tuple[str, Dict[str, Any]]]:
+        """
+        Extracts tool calls from text based on the TOOL_CALL:: prefix and JSON payload.
 
-    def extract_tool_calls(self, text: str) -> List[Tuple[str, str]]:
-        """Extract all tool calls from text using registered patterns, sorted by priority."""
-        tool_calls = []
+        Args:
+            text (str): The text potentially containing tool call lines.
 
-        sorted_tools = sorted(self.patterns.items(),
-                              key=lambda item: self.priorities.get(item[0], float('inf')))
+        Returns:
+            List[Tuple[str, Dict[str, Any]]]: A list of tuples, where each tuple contains
+                                              the tool name (str) and its arguments dictionary.
+                                              Returns an empty list if no valid calls are found.
+        """
+        tool_calls: List[Tuple[str, Dict[str, Any]]] = []
+        lines = text.splitlines()
+        prefix = "TOOL_CALL::"
 
-        processed_text = text
-        for tool_name, pattern in sorted_tools:
-            try:
-                # Find all matches in the current text state
-                matches = re.finditer(pattern, processed_text)
-                new_processed_text = ""
-                last_end = 0
-                for match in matches:
-                    new_processed_text += processed_text[last_end:match.start()]
-                    new_processed_text += "[#MATCHED#]" * len(match.group(0))
-                    last_end = match.end()
+        for i, line in enumerate(lines):
+            trimmed_line = line.strip()
+            if trimmed_line.startswith(prefix):
+                json_str = trimmed_line[len(prefix):].strip()
+                if not json_str:
+                     logger.warning(f"Found '{prefix}' on line {i+1} but no JSON payload followed.")
+                     continue
 
-                    if match.lastindex and match.lastindex >= 1:
-                         tool_calls.append((tool_name, match.group(1).strip()))
-                    else:
-                         tool_calls.append((tool_name, ""))
+                try:
+                    payload = json.loads(json_str)
+                    # Validate the structure
+                    if not isinstance(payload, dict):
+                        logger.warning(f"Parsed payload on line {i+1} is not a dictionary: {payload}")
+                        continue
+                    if "tool" not in payload or not isinstance(payload.get("tool"), str):
+                        logger.warning(f"Parsed payload on line {i+1} missing or invalid 'tool' key: {payload}")
+                        continue
+                    if "args" not in payload or not isinstance(payload.get("args"), dict):
+                        logger.warning(f"Parsed payload on line {i+1} missing or invalid 'args' key: {payload}")
+                        continue
 
-                new_processed_text += processed_text[last_end:]
-                processed_text = new_processed_text.replace("[#MATCHED#]", "")
+                    # Extract validated data
+                    tool_name = payload["tool"]
+                    args_dict = payload["args"]
 
-            except re.error as e:
-                 print(f'error:{e} while doing regx')
-                 continue
+                    # Check if tool name is actually registered
+                    if tool_name not in self.tools:
+                         logger.warning(f"Extracted tool call for unregistered tool '{tool_name}' on line {i+1}. Skipping.")
+                         continue
+
+                    logger.info(f"Successfully extracted tool call on line {i+1}: tool='{tool_name}', args={args_dict}")
+                    tool_calls.append((tool_name, args_dict))
+
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to decode JSON on line {i+1} after '{prefix}': {e}. Payload was: '{json_str}'")
+                except Exception as e:
+                    logger.error(f"Unexpected error processing line {i+1} starting with '{prefix}': {e}", exc_info=True)
+
+        if not tool_calls:
+            logger.debug("No valid tool calls found in the provided text.")
+        else:
+            logger.debug(f"Extracted {len(tool_calls)} tool call(s).")
 
         return tool_calls

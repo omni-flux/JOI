@@ -1,204 +1,385 @@
-# --- START OF FILE api_server.py ---
-
-import asyncio
+import os
+import uuid
+from typing import Dict, List, Any
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 import logging
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import List, Literal, Tuple
+from openai import OpenAI
+import google.generativeai as genai
+from dotenv import load_dotenv
 
-# --- CHOOSE YOUR BACKEND ---
-# Option 1: Use Gemini (requires gemini_chatbot.py structure)
-from gemini_chatbot import (
-    send_to_gemini,
-    process_tool_calls,
-    conversation_history, # IMPORTANT: Using global history for demo purposes ONLY
-    MAX_CONSECUTIVE_TOOL_CALLS,
-    tool_registry # Import tool_registry to extract calls for reporting
+# Load environment variables
+load_dotenv()
+
+# Import tools registry
+from tools import tool_registry
+
+# Import core functions from chatbot implementations
+from openai_chatbot import send_to_openai
+from gemini_chatbot import send_to_gemini
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-CHATBOT_SEND_FUNCTION = send_to_gemini
-CHATBOT_PROCESS_TOOLS_FUNCTION = process_tool_calls
-USER_ROLE = "user"
-ASSISTANT_ROLE = "model"
-TOOL_RESULT_ROLE = "function" # Gemini uses 'function' for results
+logger = logging.getLogger("api_server")
 
-# # Option 2: Use OpenAI (requires openai_chatbot.py structure)
-# # Comment out Gemini imports above and uncomment these
-# from openai_chatbot import (
-#     send_to_openai,
-#     process_tool_calls,
-#     conversation_history, # IMPORTANT: Using global history for demo purposes ONLY
-#     MAX_CONSECUTIVE_TOOL_CALLS,
-#     tool_registry # Import tool_registry to extract calls for reporting
-# )
-# CHATBOT_SEND_FUNCTION = send_to_openai
-# CHATBOT_PROCESS_TOOLS_FUNCTION = process_tool_calls
-# USER_ROLE = "user"
-# ASSISTANT_ROLE = "assistant"
-# TOOL_RESULT_ROLE = "system" # OpenAI example used 'system' for simulated results
-# --- END BACKEND CHOICE ---
+# Configure APIs
+try:
+    openai_api_key = os.environ["OPENAI_API_KEY"]
+    openai_api_base = os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1")
+    openai_client = OpenAI(api_key=openai_api_key, base_url=openai_api_base)
+    logger.info("OpenAI client initialized successfully")
+except KeyError:
+    logger.warning("OpenAI API key not found in environment variables")
+    openai_client = None
 
+try:
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    logger.info("Google Gemini API initialized successfully")
+except KeyError:
+    logger.warning("Gemini API key not found in environment variables")
 
-# Configure basic logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Maximum number of consecutive tool calls to prevent infinite loops
+MAX_CONSECUTIVE_TOOL_CALLS = 15
 
-# --- Pydantic Models for API ---
+# Create FastAPI app
+app = FastAPI(title="JOI - AI Assistant API")
 
-class UserInput(BaseModel):
-    message: str
-
-class ChatStep(BaseModel):
-    role: Literal["user", "assistant", "tool_execution", "tool_result", "error", "system_info"]
-    content: str
-
-# --- FastAPI App ---
-app = FastAPI(
-    title="Simple Chatbot API",
-    description="Wraps the console chatbot logic. WARNING: Uses global state, suitable for single-user demo ONLY.",
+# Add CORS middleware - update with your frontend URL in production
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins in development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- WARNING ABOUT GLOBAL STATE ---
-# This API uses a global list `conversation_history` imported from the chatbot module.
-# This makes the API STATEFUL and UNSUITABLE for concurrent users.
-# Every call modifies the same history list. Restart the API server to clear history.
-# This is purely for demonstrating the chatbot logic via a UI quickly.
-# -----------------------------------
+# Global chat history - reset for each new chat
+# Structure: {connection_id: {"history": [...], "model_type": str}}
+active_connections: Dict[str, Dict[str, Any]] = {}
 
-@app.post("/chat", response_model=List[ChatStep])
-async def handle_chat_turn(user_input: UserInput):
-    """
-    Handles one turn of the conversation:
-    1. Takes user input.
-    2. Gets AI response.
-    3. Processes tools if requested by AI.
-    4. Gets final AI response if tools were used.
-    5. Returns all steps in the turn.
-    """
-    turn_steps: List[ChatStep] = []
-    original_history_len = len(conversation_history) # Track history additions this turn
+# Import system prompt
+from prompts import system_prompt
+
+
+# Message handlers for WebSocket
+async def handle_chat_start(websocket: WebSocket, connection_id: str, data: Dict[str, Any]):
+    """Handle request to start a new chat (reset history)"""
+    model_type = data.get("model", "openai")  # Default to OpenAI if not specified
+
+    # Initialize with system prompt and appropriate role format
+    if model_type == "openai":
+        active_connections[connection_id] = {
+            "history": [{"role": "system", "content": system_prompt}],
+            "model_type": "openai"
+        }
+    else:  # gemini
+        active_connections[connection_id] = {
+            "history": [{"role": "system", "content": system_prompt}],
+            "model_type": "gemini"
+        }
+
+    await websocket.send_json({
+        "type": "status",
+        "payload": f"New chat started with {model_type} model"
+    })
+    logger.info(f"New chat started for connection {connection_id} using {model_type} model")
+
+
+async def handle_load_chat(websocket: WebSocket, connection_id: str, data: Dict[str, Any]):
+    """Handle loading an existing chat history"""
+    chat_history = data.get("history", [])
+    model_type = data.get("model", "openai")
+
+    if not chat_history:
+        await websocket.send_json({
+            "type": "error",
+            "payload": "No chat history provided"
+        })
+        return
+
+    # Ensure system prompt is present
+    if not any(msg.get("role") == "system" for msg in chat_history):
+        if model_type == "openai":
+            chat_history.insert(0, {"role": "system", "content": system_prompt})
+        else:  # gemini
+            chat_history.insert(0, {"role": "system", "content": system_prompt})
+
+    active_connections[connection_id] = {
+        "history": chat_history,
+        "model_type": model_type
+    }
+
+    await websocket.send_json({
+        "type": "status",
+        "payload": f"Loaded existing chat with {model_type} model"
+    })
+    logger.info(f"Loaded existing chat for connection {connection_id} using {model_type} model")
+
+
+async def handle_user_message(websocket: WebSocket, connection_id: str, data: Dict[str, Any]):
+    """Process a user message and get AI response"""
+    user_message = data.get("payload", "")
+    model_override = data.get("model")  # Optional model override
+
+    # Ensure connection exists
+    if connection_id not in active_connections:
+        # Create new connection with default model if not specified
+        model_type = model_override or "openai"
+        active_connections[connection_id] = {
+            "history": [{"role": "system", "content": system_prompt}],
+            "model_type": model_type
+        }
+
+    # Get current connection data
+    connection_data = active_connections[connection_id]
+    history = connection_data["history"]
+    model_type = model_override or connection_data["model_type"]
+
+    # Update model type if overridden
+    if model_override:
+        connection_data["model_type"] = model_override
+
+    # Add user message to history with appropriate role
+    if model_type == "openai":
+        history.append({"role": "user", "content": user_message})
+    else:  # gemini
+        history.append({"role": "human", "content": user_message})
+
+    # Process message with appropriate model
+    await process_message_with_model(websocket, connection_id, model_type)
+
+
+async def process_message_with_model(websocket: WebSocket, connection_id: str, model_type: str):
+    """Process a message with the specified model and handle tool calls"""
+    connection_data = active_connections[connection_id]
+    history = connection_data["history"]
+
+    # Process AI response and potential tool calls in a loop
+    tool_call_count = 0
+    has_tool_calls = True
+
+    while has_tool_calls and tool_call_count < MAX_CONSECUTIVE_TOOL_CALLS:
+        # Get AI response based on model type
+        accumulated_response = ""
+
+        if model_type == "openai":
+            # Convert history format if needed (from gemini to openai)
+            openai_messages = []
+            for msg in history:
+                role = msg["role"]
+                if role == "human":
+                    role = "user"
+                elif role == "tool":
+                    role = "system"  # Tool results go in system messages
+                openai_messages.append({"role": role, "content": msg["content"]})
+
+            # Stream response chunks to client
+            for chunk, accumulated in send_to_openai(openai_messages, stream=True):
+                accumulated_response = accumulated
+                await websocket.send_json({
+                    "type": "ai_chunk",
+                    "payload": chunk
+                })
+
+            # Add response to history
+            history.append({"role": "assistant", "content": accumulated_response})
+
+            # Process tool calls
+            has_tool_calls = await process_openai_tool_calls_for_websocket(
+                websocket,
+                accumulated_response,
+                history
+            )
+
+        else:  # gemini
+            # Stream response chunks to client
+            for chunk, accumulated in send_to_gemini(history, stream=True):
+                accumulated_response = accumulated
+                await websocket.send_json({
+                    "type": "ai_chunk",
+                    "payload": chunk
+                })
+
+            # Add response to history
+            history.append({"role": "assistant", "content": accumulated_response})
+
+            # Process tool calls
+            has_tool_calls = await process_gemini_tool_calls_for_websocket(
+                websocket,
+                accumulated_response,
+                history
+            )
+
+        if has_tool_calls:
+            tool_call_count += 1
+            # Send status update to client
+            await websocket.send_json({
+                "type": "status",
+                "payload": f"Processing tool call {tool_call_count}/{MAX_CONSECUTIVE_TOOL_CALLS}"
+            })
+
+    if tool_call_count == MAX_CONSECUTIVE_TOOL_CALLS:
+        await websocket.send_json({
+            "type": "warning",
+            "payload": f"Reached maximum consecutive tool calls limit ({MAX_CONSECUTIVE_TOOL_CALLS})"
+        })
+
+
+async def process_openai_tool_calls_for_websocket(
+        websocket: WebSocket,
+        ai_response: str,
+        history: List[Dict[str, str]]
+) -> bool:
+    """Adapter for OpenAI tool call processing that works with WebSockets"""
+    # Extract tool calls
+    tool_calls = tool_registry.extract_tool_calls(ai_response)
+
+    if not tool_calls:
+        return False  # No tool calls found
+
+    tool_results = []
+    for i, (tool_type, tool_value) in enumerate(tool_calls):
+        # Send status to client
+        await websocket.send_json({
+            "type": "tool_status",
+            "payload": f"Executing tool call {i + 1}/{len(tool_calls)}: {tool_type}"
+        })
+
+        # Execute the tool
+        result = await tool_registry.execute(tool_type, tool_value)
+
+        # Send result to client
+        await websocket.send_json({
+            "type": "tool_result",
+            "payload": {
+                "tool": tool_type,
+                "args": tool_value,
+                "result": result
+            }
+        })
+
+        tool_results.append((tool_type, tool_value, result))
+
+    # Add all tool results to conversation history
+    for tool_type, tool_value, result in tool_results:
+        # Use a consistent naming convention for tool types
+        type_name = "Application" if tool_type == "app" else "Search" if tool_type == "search" else tool_type.capitalize()
+        history.append({
+            "role": "system",
+            "content": f"{type_name} tool execution result for '{tool_value}':\n\n{result}"
+        })
+
+    return True  # Tool calls were processed
+
+
+async def process_gemini_tool_calls_for_websocket(
+        websocket: WebSocket,
+        ai_response: str,
+        history: List[Dict[str, str]]
+) -> bool:
+    """Adapter for Gemini tool call processing that works with WebSockets"""
+    # Extract tool calls
+    tool_calls = tool_registry.extract_tool_calls(ai_response)
+
+    if not tool_calls:
+        return False  # No tool calls found
+
+    tool_results = []
+    for i, (tool_type, tool_value) in enumerate(tool_calls):
+        # Send status to client
+        await websocket.send_json({
+            "type": "tool_status",
+            "payload": f"Executing tool call {i + 1}/{len(tool_calls)}: {tool_type}"
+        })
+
+        # Execute the tool
+        result = await tool_registry.execute(tool_type, tool_value)
+
+        # Send result to client
+        await websocket.send_json({
+            "type": "tool_result",
+            "payload": {
+                "tool": tool_type,
+                "args": tool_value,
+                "result": result
+            }
+        })
+
+        tool_results.append((tool_type, tool_value, result))
+
+    # Add all tool results to conversation history
+    for tool_type, tool_value, result in tool_results:
+        # Use a consistent naming convention for tool types
+        type_name = "Application" if tool_type == "app" else "Search" if tool_type == "search" else tool_type.capitalize()
+        history.append({
+            "role": "tool",
+            "content": f"{type_name} tool execution result for '{tool_value}':\n\n{result}"
+        })
+
+    return True  # Tool calls were processed
+
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    """WebSocket endpoint for real-time chat"""
+    await websocket.accept()
+
+    # Generate a unique connection ID for this session
+    connection_id = f"{client_id}_{uuid.uuid4().hex[:8]}"
 
     try:
-        logger.info(f"Received message: {user_input.message}")
-        if not user_input.message:
-            raise HTTPException(status_code=400, detail="Message cannot be empty")
+        logger.info(f"New WebSocket connection: {connection_id}")
 
-        # 1. Add user message to history and steps
-        conversation_history.append({"role": USER_ROLE, "content": user_input.message})
-        turn_steps.append(ChatStep(role="user", content=user_input.message))
+        # Main message handling loop
+        while True:
+            # Receive message from client
+            data = await websocket.receive_json()
+            message_type = data.get("type", "")
 
-        consecutive_tool_calls = 0
-        while consecutive_tool_calls < MAX_CONSECUTIVE_TOOL_CALLS:
-            # Store length before potential tool results are added
-            history_len_before_tool_results = len(conversation_history)
-
-            # 2. Get AI response
-            logger.info("Sending current history to LLM...")
-            ai_response_text = CHATBOT_SEND_FUNCTION(conversation_history)
-            logger.info(f"LLM Raw Response: {ai_response_text[:100]}...") # Log snippet
-
-            # Add AI response to history and steps
-            conversation_history.append({"role": ASSISTANT_ROLE, "content": ai_response_text})
-            turn_steps.append(ChatStep(role="assistant", content=ai_response_text))
-
-            # 3. Check for and process tool calls
-            # Extract calls just to report them *before* execution
-            try:
-                tool_calls_extracted: List[Tuple[str, str]] = tool_registry.extract_tool_calls(ai_response_text)
-            except Exception as e:
-                logger.error(f"Error extracting tool calls: {e}", exc_info=True)
-                tool_calls_extracted = [] # Proceed without tool calls if extraction fails
-
-            if tool_calls_extracted:
-                logger.info(f"AI requested {len(tool_calls_extracted)} tool call(s).")
-                # Report planned execution to UI
-                exec_details = [f"{name}({arg[:30]}...)" for name, arg in tool_calls_extracted]
-                turn_steps.append(ChatStep(role="tool_execution", content=f"Executing Tools: {', '.join(exec_details)}"))
-
-                # Execute tools (this function modifies conversation_history directly)
-                try:
-                    # Pass only the latest AI response text for tool processing
-                    await CHATBOT_PROCESS_TOOLS_FUNCTION(ai_response_text)
-                    tools_processed = True # Assume success if no exception
-                except Exception as tool_exec_err:
-                    logger.error(f"Error during tool processing: {tool_exec_err}", exc_info=True)
-                    error_msg = f"Failed to execute tools: {tool_exec_err}"
-                    turn_steps.append(ChatStep(role="error", content=error_msg))
-                    # Optionally add error to history? Decided against it for now to avoid confusing the LLM further.
-                    tools_processed = False
-                    break # Stop processing this turn on tool error
-
-                # Report tool results (read from history additions)
-                if tools_processed:
-                    new_history_items = conversation_history[history_len_before_tool_results:]
-                    tool_result_items = [item for item in new_history_items if item["role"] == TOOL_RESULT_ROLE]
-
-                    if not tool_result_items and tool_calls_extracted:
-                         # This case might happen if process_tool_calls fails silently or has issues
-                         logger.warning("Tools were extracted, but no results found in history after processing.")
-                         turn_steps.append(ChatStep(role="tool_result", content="Tool execution attempted, but no results recorded in history."))
-
-                    for result_item in tool_result_items:
-                        turn_steps.append(ChatStep(role="tool_result", content=result_item["content"]))
-
-                    consecutive_tool_calls += 1
-                    # Loop back to get AI response based on tool results
-
+            # Process message based on type
+            if message_type == "start_chat":
+                await handle_chat_start(websocket, connection_id, data)
+            elif message_type == "load_chat":
+                await handle_load_chat(websocket, connection_id, data)
+            elif message_type == "user_message":
+                await handle_user_message(websocket, connection_id, data)
             else:
-                # No tool calls requested in the latest AI response
-                logger.info("No tool calls requested by AI.")
-                break # Exit the tool processing loop
+                await websocket.send_json({
+                    "type": "error",
+                    "payload": f"Unknown message type: {message_type}"
+                })
 
-        if consecutive_tool_calls == MAX_CONSECUTIVE_TOOL_CALLS:
-            logger.warning("Reached maximum consecutive tool calls.")
-            info_msg = f"System Note: Reached maximum consecutive tool calls ({MAX_CONSECUTIVE_TOOL_CALLS})."
-            turn_steps.append(ChatStep(role="system_info", content=info_msg))
-            # Optionally add to history for the LLM to see
-            conversation_history.append({"role": USER_ROLE, "content": info_msg}) # Use USER_ROLE to inject system notes sometimes
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: {connection_id}")
+        # Clean up connection data
+        if connection_id in active_connections:
+            del active_connections[connection_id]
 
-        logger.info(f"Turn completed. Returning {len(turn_steps)} steps.")
-        return turn_steps
-
-    except HTTPException:
-        # Re-raise HTTP exceptions directly
-        raise
     except Exception as e:
-        logger.exception("An unexpected error occurred in /chat endpoint.") # Log full traceback
-        # Return the steps accumulated so far plus the error
-        turn_steps.append(ChatStep(role="error", content=f"An unexpected server error occurred: {str(e)}"))
-        # Don't raise HTTPException here if we want to return partial steps + error message
-        # Instead, return the list containing the error step
-        return turn_steps
-        # Alternatively, re-raise as a 500 error:
-        # raise HTTPException(status_code=500, detail=f"An unexpected server error occurred: {str(e)}")
+        logger.error(f"Error in WebSocket connection {connection_id}: {str(e)}", exc_info=True)
+        try:
+            await websocket.send_json({
+                "type": "error",
+                "payload": f"Server error: {str(e)}"
+            })
+        except:
+            pass  # Connection might be closed already
 
-@app.get("/history", response_model=List[dict])
-async def get_history():
-    """Returns the current global conversation history (for debugging)."""
-    # WARNING: Exposes the entire internal state. Use with caution.
-    return conversation_history
 
-@app.delete("/history", status_code=204)
-async def clear_history():
-    """Clears the global conversation history."""
-    logger.info("Clearing global conversation history.")
-    conversation_history.clear()
-    # Re-add system prompt if necessary (depends on chatbot implementation)
-    # For Gemini (using system_instruction in model init), clearing might be enough.
-    # For OpenAI, you might need to re-add the system message:
-    # from prompts import system_prompt
-    # conversation_history.append({"role": "system", "content": system_prompt})
-    return None # Return No Content
+# Add a simple health check endpoint
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "ok", "models": {
+        "openai": openai_client is not None,
+        "gemini": "GEMINI_API_KEY" in os.environ
+    }}
 
-# --- Run the server (for local testing) ---
+
 if __name__ == "__main__":
     import uvicorn
-    print("\n--- WARNING ---")
-    print("This API server uses global state for conversation history.")
-    print("It is suitable for SINGLE-USER DEMO purposes ONLY.")
-    print("Restart the server to clear history if needed, or use the DELETE /history endpoint.")
-    print("---------------\n")
-    # Ensure host is 0.0.0.0 to be accessible on your network if needed
-    # Default is 127.0.0.1 (localhost)
-    uvicorn.run(app, host="127.0.0.1", port=8000)
 
-# --- END OF FILE api_server.py ---
+    uvicorn.run(app, host="0.0.0.0", port=8000)

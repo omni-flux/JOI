@@ -5,3 +5,10 @@ GEMINI_API_KEY=Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 GOOGLE_API_KEY=Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 GOOGLE_SEARCH_ENGINE_ID=519xxxxxxxxxx
 GOOGLE_SEARCH_API_KEY=AIzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+
+#browser-use-------------------------------------------------------+
+ANONYMIZED_TELEMETRY=false
+CHROME_PATH='C:/Program Files/Google/Chrome/Application/chrome.exe'
+CHROME_DATA_PATH=C:/Users/ommka/AppData/Local/Google/Chrome/AI_Data
+#------------------------------------------------------------------+

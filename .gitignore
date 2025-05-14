@@ -1,5 +1,6 @@
 tools/credentials.json
-tools/token.pickle
+tools/*.pickle
 *.pyc
-__pycache__/
+__pycache__
 .env
+tools/.idea
