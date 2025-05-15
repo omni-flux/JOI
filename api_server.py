@@ -27,7 +27,7 @@ logging.basicConfig(
 logger = logging.getLogger("api_server")
 
 # --- Hardcoded list for ALLOWED_CLIENT_IDS ---
-ALLOWED_CLIENT_IDS: List[str] = ["frontend_main", "test_client_1"]  # Add your predefined IDs here
+ALLOWED_CLIENT_IDS: List[str] = ["frontend_main", "test_client_1","test_user","123"]  # Add your predefined IDs here
 if not ALLOWED_CLIENT_IDS:
     logger.warning("ALLOWED_CLIENT_IDS is empty. All WebSocket connections will be rejected if this is unintentional.")
 # --- End of ALLOWED_CLIENT_IDS ---
@@ -188,6 +188,7 @@ async def process_message_with_model_internal(websocket: WebSocket, connection_i
             for chunk, acc_resp in send_to_openai(llm_messages, stream=True):
                 accumulated_response = acc_resp
                 await websocket.send_json({"type": "ai_chunk", "payload": chunk})
+            await websocket.send_json({"type": "stream_end", "payload": "OpenAI response turn ended."})
             history.append({"role": "assistant", "content": accumulated_response})
             has_tool_calls = await process_openai_tool_calls_for_websocket(websocket, accumulated_response, history)
 
@@ -195,6 +196,7 @@ async def process_message_with_model_internal(websocket: WebSocket, connection_i
             for chunk, acc_resp in send_to_gemini(llm_messages, stream=True):
                 accumulated_response = acc_resp
                 await websocket.send_json({"type": "ai_chunk", "payload": chunk})
+            await websocket.send_json({"type": "stream_end", "payload": "Gemini response turn ended."})
             history.append({"role": "model", "content": accumulated_response})  # Gemini uses 'model' for its responses
             has_tool_calls = await process_gemini_tool_calls_for_websocket(websocket, accumulated_response, history)
 
@@ -212,7 +214,6 @@ async def process_message_with_model_internal(websocket: WebSocket, connection_i
             "type": "warning",
             "payload": f"Reached maximum consecutive tool calls limit ({MAX_CONSECUTIVE_TOOL_CALLS})"
         })
-
 
 async def process_openai_tool_calls_for_websocket(
         websocket: WebSocket, ai_response: str, history: List[Dict[str, str]]
@@ -345,7 +346,6 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-
     if not ALLOWED_CLIENT_IDS:
         print("CRITICAL: ALLOWED_CLIENT_IDS is not set or is empty. WebSocket connections will be rejected.")
     logger.info(f"Starting server. Allowed client IDs for WebSocket: {ALLOWED_CLIENT_IDS}")
