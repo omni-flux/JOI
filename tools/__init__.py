@@ -4,6 +4,7 @@ from .system_info import system_info
 from .email_sender import send_email
 from .calendar_tasks import manage_calendar_tasks
 from .browser_tool import browser_automation
+from .memory_tool import manage_memory_tool
 
 
 from .file_system import (
@@ -71,6 +72,12 @@ tool_registry.register(
 tool_registry.register(
     name="browser",
     function=browser_automation
+)
+
+# Registered Memory Tool
+tool_registry.register(
+    name="memory", # Name the AI will use
+    function=manage_memory_tool
 )
 
 __all__ = ['tool_registry']
