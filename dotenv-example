@@ -1,14 +1,20 @@
 create a .env file inside the main dir and structure it like this with your api keys
 
-OPENAI_API_KEY=gxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-GEMINI_API_KEY=Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-GOOGLE_API_KEY=Axxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-GOOGLE_SEARCH_ENGINE_ID=519xxxxxxxxxx
-GOOGLE_SEARCH_API_KEY=AIzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+OPENAI_API_KEY=ghp_abxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxMy
+GEMINI_API_KEY=AIzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxjW4
+GOOGLE_API_KEY=AIzaxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx4
+GOOGLE_SEARCH_ENGINE_ID=519xxxxxx83
+GOOGLE_SEARCH_API_KEY=AIzxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx6Q
 
-
-#browser-use-------------------------------------------------------+
+#-----------------------------browser-use--------------------------+
 ANONYMIZED_TELEMETRY=false
 CHROME_PATH='C:/Program Files/Google/Chrome/Application/chrome.exe'
 CHROME_DATA_PATH=C:/Users/ommka/AppData/Local/Google/Chrome/AI_Data
 #------------------------------------------------------------------+
+
+#+------------------------------Astra-DB---------------------------+
+ASTRA_DB_API_ENDPOINT=https://bbxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxbpd9zufvdfv.com
+ASTRA_DB_APPLICATION_TOKEN=Asxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx924a607048e
+ASTRA_DB_KEYSPACE=default_keyspace
+MEMORY_COLLECTION_NAME=ai_memory_store_v2
+#+-----------------------------------------------------------------+
